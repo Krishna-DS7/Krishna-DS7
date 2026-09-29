@@ -315,7 +315,7 @@ def s02(wb):
         "Binary reward = 1 only if ALL tests pass (same as DeepSWE). It is hard to game partially, but sparse: a fix "
         "passing 4 of 5 tests scores the same 0 as garbage.",
         "Partial reward = fraction of tests passed gives a denser signal, but invites 'pass the easy tests and stop'. "
-        "Meta's SWE-RL used a continuous similarity-to-true-patch reward instead.",
+        "Meta's SWE-RL used a continuous reward instead (difflib similarity to the reference patch).",
         "Generated code is untrusted, so it needs isolation and a timeout. In the repo, the buggy fix_binary_search "
         "loops forever and env.step has no timeout. swe-rl-ipr runs candidates in a subprocess with a timeout "
         "(runner.py) and in gVisor sandboxes on Modal at scale.",
@@ -705,7 +705,7 @@ def s09(wb):
     s.bullets([
         "Putting sheets 04 + 07 together: for each rollout, multiply its advantage by its mean token log-prob, "
         "average over the group, and negate. Minimising that raises the log-prob of A > 0 answers and lowers A < 0 ones.",
-        "The loss value is NOT a progress meter. It hovers near 0 and can be negative (v2 history.json: avg_loss drifts from −0.010 to −0.080 over 10 epochs). "
+        "The loss value is NOT a progress meter. It hovers near 0 and can be negative (v2 history.json: avg_loss is −0.010 in epoch 1, reaches −0.080 in epoch 9 and ends at −0.076). "
         "Track reward / solve rate instead.",
         "Memory trick in v2: call backward() after each rollout (gradients accumulate and each graph is freed), "
         "divide by the count, clip the gradient norm to 1.0, and take ONE AdamW step per puzzle.",
@@ -750,7 +750,7 @@ def s10(wb):
         "Pushing hard on a few puzzles can make the model drift: weird text, lost skills. KL divergence measures how "
         "different the new model's distribution is from a frozen reference copy (the starting weights).",
         "Adding β · KL to the loss penalises drift. Mini-SWE-RL v1 uses β = 0.01. v2 has β = 0.05 but ran with "
-        "--no-ref (KL off) to save memory. Result: 7 puzzles gained and 5 regressed (forgetting).",
+        "--no-ref (KL off) to save memory. The README reports 7 puzzles gained and 5 regressed, and blames the regressions on forgetting (its gains table actually lists 8, see sheet 16).",
         "DeepSWE / DAPO-style GRPO++ drop the KL term and rely on clipping (sheet 11) for stability.",
         "Summing over the whole vocabulary at every token is expensive, so KL is estimated from the sampled tokens. "
         "[From the wider RL literature, not the repo:] k1 = log π − log π_ref is unbiased but noisy and can be negative. k3 = (r − 1) − log r with "
@@ -796,7 +796,7 @@ def s11(wb):
             "Cap how far one batch can move each token's probability. Clip-higher gives more room to raise rare good tokens.")
     s.section("CONCEPT", "concept")
     s.bullets([
-        "Trainers usually take several gradient steps on one batch of rollouts (swe-rl-ipr config: batch 64 split into mini-batches of 16 = 4 optimizer steps). After the first step, the model "
+        "Trainers usually take several gradient steps on one batch of rollouts (swe-rl-ipr config.yaml: train_batch_size 64 with policy_mini_batch_size 16, i.e. 4 mini-batch steps per batch). After the first step, the model "
         "that generated the data (π_old) is no longer the model being trained (π_θ).",
         "The importance ratio r = π_θ / π_old (per token) corrects for that mismatch.",
         "Clipping keeps r inside [1 − ε_low, 1 + ε_high] in the objective. Once a token's probability has moved "
@@ -971,7 +971,7 @@ def s15(wb):
     s.section("CONCEPT", "concept")
     s.bullets([
         "DeepSWE, SWE-agent and OpenHands work in a loop: call a tool (search, open file, edit, run tests), read "
-        "the result, and repeat for up to about 50–100 steps before submitting a patch.",
+        "the result, and repeat for many steps before submitting a patch (swe-rl-ipr's config caps it at 100, noting a typical horizon of 50–100).",
         "The whole trajectory gets ONE reward at the end (tests pass or not). GRPO still works: a group is "
         "G full trajectories on the same issue.",
         "Only tokens the model wrote are trained. Tool outputs (file contents, test logs) are masked, because the "
@@ -1022,7 +1022,7 @@ def s16(wb):
         "Paired comparison: look at the puzzles that flipped. If training did nothing, each flip is equally likely "
         "to be a gain or a loss (sign test / McNemar).",
         "Mini-SWE-RL: 7 gained, 5 lost (net +2) → p ≈ 0.77, indistinguishable from noise. swe-rl-ipr 7B MBPP: "
-        "plus@1 of 0.667 under IPR vs 0.633 under the raw reward is about one problem out of ~30.",
+        "plus@1 rising 0.633 → 0.667 under IPR (flat at 0.633 under the raw reward) is a small change. The repo doesn't state the eval-split size, but every reported value is a multiple of 1/30, which suggests about 1 problem out of 30.",
         "Better practice: more evaluation tasks, several seeds, and pass@k with sampling.",
     ])
     s.section("MATH", "math")
@@ -1097,10 +1097,13 @@ def s17(wb):
           (None, "Gap", f"=AVERAGE(D{a}:D{b})-AVERAGE(E{a}:E{b})", "0%", "")])
     s.section("EXAMPLE B: the gap during real training (Qwen2.5-Coder-7B, GRPO on MBPP, eval on MBPP+)", "example")
     s.note("Source: swe-rl-ipr/paper/FACTS.md §3d. base@1 = passes visible MBPP tests; plus@1 = passes the large "
-           "held-out MBPP+ suite. *IPR base@1 is derived from the reported plus@1 and gap.")
+           "held-out MBPP+ suite. The 30-step matched numbers also appear in paper/tables/rl_table.tex. "
+           "The IPR arm's starting values aren't given. The paper says its gap 'stays flat at 0.133', which doesn't "
+           "match the raw arm's 0.067 starting gap, so the two arms' first evaluations may differ.")
     data = [("Raw reward, 100-step run, start", 0.78, 0.68), ("Raw reward, 100-step run, end", 0.82, 0.68),
-            ("Raw reward, 30-step matched run, end", 0.833, 0.633), ("IPR reward, 30-step matched run, end*", 0.800, 0.667)]
-    s.table(["Run", "base@1 (visible)", "plus@1 (held-out)", "Gap"], 4,
+            ("Raw reward, 30-step matched run, start", 0.70, 0.633),
+            ("Raw reward, 30-step matched run, end", 0.833, 0.633), ("IPR reward, 30-step matched run, end", 0.800, 0.667)]
+    s.table(["Run", "base@1 (visible)", "plus@1 (held-out)", "Gap"], 5,
             lambda i, r: list(data[i]) + [f"=C{r}-D{r}"], fmts={1: "0.000", 2: "0.000", 3: "0.000"})
     s.note("What to notice: under the raw reward the visible score climbs while true correctness stays flat, so the "
            "model is learning to pass these particular tests. IPR is the only arm whose held-out score rises. "
@@ -1201,7 +1204,7 @@ def s18(wb):
              "Hack caught?"], 4, grade_row, fmts={1: "0", 2: "0", 3: "0", 4: "0", 5: "0", 6: "0", 7: "0"},
             header_height=44)
     s.note("What to notice: the raw reward pays 3 of 4 candidates. IPR pays only the real fix and flags both cheats. "
-           "The tamper cheat's code is correct, but it touched the tests, so it is zeroed before any test runs.")
+           "The tamper cheat's code is correct, but it touched the tests, so reward.py zeroes it and skips the perturbed suites (the visible suite still runs, for telemetry).")
     return s
 
 
@@ -1255,7 +1258,8 @@ def s20(wb):
     s.section("CONCEPT", "concept")
     s.bullets([
         "A replica of swe-rl-ipr/ipr/train/run.py, made deterministic: a softmax policy over 4 strategies, trained "
-        "with the exact expected policy gradient (sheet 05) instead of sampled groups.",
+        "with the exact expected policy gradient (sheet 05) instead of sampled groups. The repo's run.py samples groups "
+        "of 12 for 60 rounds at lr 0.4 with GRPO advantages; here it is 40 rounds at η = 2.",
         "Cheat-favouring prior: hacks start more likely because they are easier to write (logits 0, 1.1, 0.6, 0).",
         "Raw reward pays real, lookup and tamper all +1. The update is π_k(R_k − J), so the already-likelier cheat "
         "gains faster (rich get richer) and P(hack) GROWS.",
@@ -1352,7 +1356,7 @@ def s21(wb):
           ("e", "Epochs", 10, "0", ""), ("ro", "Total training rollouts", "=«t»*«g»*«e»", "#,##0", "README: 1,280"),
           ("sec", "Seconds per Ollama rollout", 0.5, "0.0", "README: ~0.3–0.8 s"),
           (None, "Generation time (minutes)", "=«ro»*«sec»/60", "0.0",
-           "the rest of the ~30 min (history.json) is HuggingFace forward/backward passes")])
+           "estimate: the rest of the ~30 min in history.json is mostly HuggingFace forward/backward passes")])
     s.section("EXAMPLE C: memory calculator (rule-of-thumb assumptions, edit freely)", "example")
     s.kv([("P", "Parameters (billions)", 1.5, "0.0", ""), ("bw", "Bytes per weight (bf16)", 2, "0", ""),
           ("bg", "Bytes per gradient", 2, "0", ""), ("bo", "Optimizer bytes per param (AdamW fp32 m + v)", 8, "0", ""),
@@ -1360,7 +1364,7 @@ def s21(wb):
           ("tr", "Training state (GB)", "=«P»*(«bw»+«bg»+«bo»)", "0.0", "weights + gradients + optimizer"),
           ("rm", "Reference model (GB)", "=«ref»*«P»*«bw»", "0.0", ""),
           (None, "Total before activations (GB)", "=«tr»+«rm»", "0.0",
-           "README saw 34.7 GB allocated on MPS once activations were added")])
+           "README: loading policy + reference model plus optimizer state hit 34.7 GB on MPS and ran out of memory")])
     return s
 
 
