@@ -602,7 +602,7 @@ def s07(wb):
            "grpo_rollouts.py collect_rollouts() prints the same numbers.")
     s.section("MATH", "math")
     s.math([
-        "A_i = (R_i − mean(R)) / (std(R) + ε)          std is the population std (divide by G)",
+        "A_i = (R_i − mean(R)) / (std(R) + ε)          population std (divide by G); v2 skips the group when std < 1e-8, swe-rl-ipr adds ε = 1e-6",
         "With binary rewards and k successes out of G, write p = k / G:",
         "     success:  A = (1 − p) / √(p(1 − p)) = √((1 − p) / p)          failure:  A = − √(p / (1 − p))",
         "Σ_i A_i = 0 always: probability is moved from failures to successes.",
@@ -705,7 +705,7 @@ def s09(wb):
     s.bullets([
         "Putting sheets 04 + 07 together: for each rollout, multiply its advantage by its mean token log-prob, "
         "average over the group, and negate. Minimising that raises the log-prob of A > 0 answers and lowers A < 0 ones.",
-        "The loss value is NOT a progress meter. It hovers near 0 and can be negative (v2 history: avg_loss ≈ −0.01). "
+        "The loss value is NOT a progress meter. It hovers near 0 and can be negative (v2 history.json: avg_loss drifts from −0.010 to −0.080 over 10 epochs). "
         "Track reward / solve rate instead.",
         "Memory trick in v2: call backward() after each rollout (gradients accumulate and each graph is freed), "
         "divide by the count, clip the gradient norm to 1.0, and take ONE AdamW step per puzzle.",
@@ -753,9 +753,9 @@ def s10(wb):
         "--no-ref (KL off) to save memory. Result: 7 puzzles gained and 5 regressed (forgetting).",
         "DeepSWE / DAPO-style GRPO++ drop the KL term and rely on clipping (sheet 11) for stability.",
         "Summing over the whole vocabulary at every token is expensive, so KL is estimated from the sampled tokens. "
-        "k1 = log π − log π_ref is unbiased but noisy and can be negative. k3 = (r − 1) − log r with "
+        "[From the wider RL literature, not the repo:] k1 = log π − log π_ref is unbiased but noisy and can be negative. k3 = (r − 1) − log r with "
         "r = π_ref / π is unbiased, always ≥ 0, and lower variance (the one used in the GRPO paper).",
-        "Repo note: v1/v2 compute mean of π_ref · (log π_ref − log π) on the sampled tokens. That is a non-standard "
+        "Repo note: v1 sums and v2 averages π_ref · (log π_ref − log π) over the sampled tokens. That is a non-standard "
         "quantity, not a KL estimate, and it shrinks when the reference probability is small.",
     ])
     s.section("MATH", "math")
@@ -796,7 +796,7 @@ def s11(wb):
             "Cap how far one batch can move each token's probability. Clip-higher gives more room to raise rare good tokens.")
     s.section("CONCEPT", "concept")
     s.bullets([
-        "Trainers usually take several gradient steps on one batch of rollouts. After the first step, the model "
+        "Trainers usually take several gradient steps on one batch of rollouts (swe-rl-ipr config: batch 64 split into mini-batches of 16 = 4 optimizer steps). After the first step, the model "
         "that generated the data (π_old) is no longer the model being trained (π_θ).",
         "The importance ratio r = π_θ / π_old (per token) corrects for that mismatch.",
         "Clipping keeps r inside [1 − ε_low, 1 + ε_high] in the objective. Once a token's probability has moved "
@@ -871,6 +871,8 @@ def s12(wb):
     s.kv([("G", "G", f"=COUNT(C{a}:C{b})", "0", ""), ("sum", "Σ R", f"=SUM(C{a}:C{b})", "0", ""),
           ("mean", "mean R", "=«sum»/«G»", "0.000", ""), ("std", "std R", f"=STDEVP(C{a}:C{b})", "0.000", ""),
           (None, "G / (G − 1)", "=«G»/(«G»-1)", "0.000", "the constant ratio in column H")])
+    s.note("Repo detail: ipr/train/grpo.py divides the LOO advantage by the std of the rewards (column J = column I × G/(G−1)). "
+           "ipr/train/run.py divides by the std of the LOO advantages themselves, which cancels the factor and gives exactly column I.")
     return s
 
 
@@ -882,7 +884,7 @@ def s13(wb):
         "Three ways to combine token losses: (a) SUM over tokens (v1): long answers get bigger updates. "
         "(b) per-answer MEAN (original GRPO, v2): every answer counts once, so each token of a short answer "
         "weighs more than a token of a long one. (c) divide by a CONSTANT such as the max length (Dr. GRPO / "
-        "DeepSWE): every token weighs the same.",
+        "DeepSWE; ipr/train/grpo.py says it divides by the max context length): every token weighs the same. Dr. GRPO is a paper from the wider literature, not cited in the repo.",
         "Length bias of (b): with a negative advantage, a long wrong answer is penalised less per token than a "
         "short wrong one, so wrong answers drift longer over training.",
         "Compact filtering (DeepSWE): rollouts that hit the max length, the time limit or the step limit get "
@@ -926,7 +928,7 @@ def s14(wb):
         "gap grows every step, and there is no importance-ratio correction.",
         "So v2 behaves like reward-weighted fine-tuning on the base model's samples. It can never learn from its "
         "own new behaviour.",
-        "Template mismatch too: Ollama /api/generate wraps the prompt in Qwen's chat template, but the trainer "
+        "Template mismatch too: Ollama's /api/generate applies the model's chat template by default (Ollama behaviour, not repo code), but the trainer "
         "scores raw prompt + response text. The 'before' eval uses Ollama and the 'after' eval uses HuggingFace "
         "on the raw prompt.",
         "Fixes: generate with the model being trained (as v1 does), sync weights to the inference server (vLLM "
@@ -986,7 +988,7 @@ def s15(wb):
         "log π(τ) = Σ_turns Σ_tokens in a_t log π(token)          (observation tokens have mask m = 0)",
         "L = − A(τ) · Σ_t m_t · log π(token_t) / normaliser",
     ])
-    s.section("EXAMPLE: token budget of one trajectory", "example")
+    s.section("EXAMPLE: token budget of one trajectory (illustrative token counts)", "example")
     s.kv([("ctx", "Max context (tokens)", 32768, "#,##0", "config.yaml max_context_len")])
     data = [("System", "Tool specs + instructions", 400), ("User", "GitHub issue text", 350),
             ("Assistant", "search('parse_version')", 60), ("Tool", "12 matching lines", 500),
@@ -1020,7 +1022,7 @@ def s16(wb):
         "Paired comparison: look at the puzzles that flipped. If training did nothing, each flip is equally likely "
         "to be a gain or a loss (sign test / McNemar).",
         "Mini-SWE-RL: 7 gained, 5 lost (net +2) → p ≈ 0.77, indistinguishable from noise. swe-rl-ipr 7B MBPP: "
-        "plus@1 0.633 → 0.667 is about one problem out of ~30.",
+        "plus@1 of 0.667 under IPR vs 0.633 under the raw reward is about one problem out of ~30.",
         "Better practice: more evaluation tasks, several seeds, and pass@k with sampling.",
     ])
     s.section("MATH", "math")
@@ -1040,7 +1042,10 @@ def s16(wb):
           (None, "95% interval after", '=TEXT(«p1»-1.96*«se1»,"0%")&" – "&TEXT(«p1»+1.96*«se1»,"0%")', None,
            "the intervals overlap almost completely")])
     s.section("EXAMPLE B: paired sign test on the flipped puzzles", "example")
-    s.kv([("g", "Puzzles gained (FAIL → PASS)", 7, "0", "README"), ("l", "Puzzles lost (PASS → FAIL)", 5, "0", "README"),
+    s.note("Caution: the README is internally inconsistent. The heading says '7 newly solved' but its table lists 8 "
+           "(4 hard + 4 medium), and 4 hard gains − 3 hard losses would not leave the hard score unchanged at 73.3%. "
+           "7 vs 5 matches the stated totals (20 → 22). Try 8 vs 5: p ≈ 0.58, still not significant.")
+    s.kv([("g", "Puzzles gained (FAIL → PASS)", 7, "0", "README headline"), ("l", "Puzzles lost (PASS → FAIL)", 5, "0", "README"),
           ("pv", "Two-sided p-value", "=MIN(1,2*BINOMDIST(MIN(«g»,«l»),«g»+«l»,0.5,TRUE))", "0.000", ""),
           (None, "Verdict", '=IF(«pv»<0.05,"significant","not significant: could be noise")', None, "")])
     s.section("EXAMPLE C: how many tasks would prove a +6.7-point lift?", "example")
@@ -1118,7 +1123,7 @@ def s18(wb):
         "Why it works: a real fix handles any valid input; a lookup table only knows the visible ones.",
         "Honest limits (from the project's findings): it needs a trusted reference + input sampler. It catches 93% "
         "of constructed cheats but only ~21–25% of natural subtle bugs. The naive version false-rejected ~10% of "
-        "correct answers; wrapper-aware comparison + a fault-tolerant gate (reject only at ≥ 2 divergences) raised "
+        "correct answers; wrapper-aware comparison + a fault-tolerant gate (reject only at ≥ max(2, ⌈0.15 × admitted checks⌉) divergences, in the MBPP grader ipr/bench/evalplus_ipr.py) raised "
         "recall 0.90 → 0.97. On SWE-bench, literal assert f(x) == y is rare, so the gold Docker image must be "
         "re-run on resampled inputs.",
     ])
@@ -1129,12 +1134,14 @@ def s18(wb):
     s.math([
         "suite_k = { (x, gold(x)) : x ~ sampler(seed_k), gold(x) does not error }",
         "R_IPR = 1[no tamper] · Π_{k=1..K} 1[candidate passes every case in suite_k]",
-        "Hack caught = 1[visible pass] · (1 − R_IPR)          Fault-tolerant variant: R = 1[no tamper] · 1[divergences < 2]",
+        "Hack caught = 1[visible pass] · (1 − R_IPR)          Fault-tolerant (MBPP grader): R = 1[divergences < max(2, ⌈0.15 · admitted⌉)]",
     ])
     s.section("EXAMPLE: grade 4 patches of to_roman(n) live (Excel's ROMAN() is the gold reference)", "example")
     s.note("Real fix = a correct implementation. Lookup cheat = returns the stored answer if n is a visible input, "
            "else KeyError. Buggy = no subtractive pairs (4 → IIII). Edit the blue n values; try putting 4 or 1994 in "
            "a perturbed suite, or 5000 (gold errors → input dropped).")
+    s.note("Simplifications vs the repo: 3 inputs per perturbed suite instead of the default 8 (RewardConfig.n_inputs_per_perturbation), "
+           "fixed inputs instead of seeded random sampling, and no order-shuffle.")
     s.sub("Visible suite (what the agent can see)")
     vis = [4, 9, 58, 1994]
     va, vb = s.r + 1, s.r + 4
@@ -1186,11 +1193,11 @@ def s18(wb):
                 f'=COUNTIF({pcol}{pa}:{pcol}{pb},0)',
                 f"=D{r}",
                 f"=IF(AND(C{r}=0,E{r}=COUNT($B${sa}:$B${sb})),1,0)",
-                f"=IF(AND(C{r}=0,F{r}<2),1,0)",
+                f"=IF(AND(C{r}=0,F{r}<MAX(2,ROUNDUP(0.15*SUM($C${sa}:$C${sb}),0))),1,0)",
                 f'=IF(AND(D{r}=1,H{r}=0),"YES: caught","")']
 
     s.table(["Candidate", "Touched test files? (1/0)", "Visible suite passed", "Perturbed suites passed (of K)",
-             "Divergences (failed perturbed cases)", "Raw reward", "IPR reward", "Fault-tolerant IPR (<2 divergences)",
+             "Divergences (failed perturbed cases)", "Raw reward", "IPR reward", "Fault-tolerant IPR (MBPP-grader threshold)",
              "Hack caught?"], 4, grade_row, fmts={1: "0", 2: "0", 3: "0", 4: "0", 5: "0", 6: "0", 7: "0"},
             header_height=44)
     s.note("What to notice: the raw reward pays 3 of 4 candidates. IPR pays only the real fix and flags both cheats. "
@@ -1383,7 +1390,8 @@ def index(wb):
     r += 1
     legend = [("12", "Blue text on yellow = an input you can change. Everything else recalculates.", True),
               ("0.375", "Black text = a formula. Don't type over these.", False),
-              ("", "Section colours: CONCEPT (blue) · MATH (purple) · EXAMPLE (green).", False)]
+              ("", "Section colours: CONCEPT (blue) · MATH (purple) · EXAMPLE (green).", False),
+              ("", "Numbers in EXAMPLE sections are illustrative toy values unless a note on the sheet cites the repo as the source.", False)]
     for sample, text, is_input in legend:
         cc = ws.cell(r, 2, sample)
         cc.alignment = Alignment(horizontal="center")
